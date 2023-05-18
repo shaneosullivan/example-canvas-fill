@@ -5,6 +5,8 @@
     const canvas = document.getElementById("canvas");
     const context = canvas.getContext("2d");
 
+    let colour = "#ff0000";
+
     // Load the image into the canvas
     const img = new Image();
 
@@ -16,7 +18,26 @@
     canvas.addEventListener("click", (evt) => {
       const { x, y } = getEventCoords(evt, canvas.getBoundingClientRect());
 
+      const dimensions = { height: canvas.height, width: canvas.width };
+      const imageData = context.getImageData(
+        0,
+        0,
+        dimensions.width,
+        dimensions.height
+      );
+
       console.log("x", x, "y", y);
+      worker.postMessage(
+        {
+          action: "fill",
+          dimensions,
+          imageData: imageData.data.buffer,
+          x,
+          y,
+          colour,
+        },
+        [imageData.data.buffer]
+      );
     });
 
     // Set up the worker
