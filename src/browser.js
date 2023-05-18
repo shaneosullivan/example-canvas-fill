@@ -212,19 +212,6 @@
       }
     }
 
-    // if a fill takes more than 10 seconds, theres likely a bug
-    // so let the user do another
-    const limit = Date.now() - 1000 * 10;
-    ongoingFills = ongoingFills.filter((time) => time > limit);
-    if (ongoingFills.length > 2) {
-      // If too many fills are queued, ignore this as it can crash
-      // the browser
-
-      return;
-    }
-
-    ongoingFills.push(Date.now());
-
     const dimensions = {
       height: imgCanvasNode.height,
       width: imgCanvasNode.width,
