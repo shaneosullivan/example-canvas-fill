@@ -49,14 +49,6 @@
 
       console.log("Main thread got worker data", data);
 
-      const { token } = data;
-
-      if (token && token !== paintWorkerToken[data.response]) {
-        // The work took too long, this response is no longer valid,
-        // so ignore it
-        return;
-      }
-
       switch (data.response) {
         case "fill":
           handleFillMessageFromWorker(data);

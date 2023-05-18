@@ -6,13 +6,172 @@ onmessage = function (evt) {
     case "fill":
       fillAction(workerData, this);
       break;
+    case "process":
+      processImageAction(workerData, this);
+      break;
     default:
       console.error("Unknown action in paint worker", workerData);
   }
 };
 
+// A new image for colouring has been loaded, so cache it and
+// pre-process it for quicker fills later.
+// We go through it pixel by pixel, and find most of the areas that
+// can be coloured in.  Each of these is identified, it's size and
+// pixels stored, then in the end it is all sent back to the main thread
+function processImageAction(workerData, self) {
+  const dimensions = workerData.dimensions;
+  const buffer = workerData.buffer;
+  const { token } = workerData;
+  const { height, width } = dimensions;
+
+  const bufferArray = new Uint8ClampedArray(buffer);
+
+  activeOpaqueToken = token;
+
+  // This array contains the pixels for the full image.
+  // We use this to keep track of which pixels we have already filled in and which we have
+  // not, so as to avoid extra work.
+  let intermediateBuffer = new Array(height * width * 4);
+  for (let i = 0; i < intermediateBuffer.length; i++) {
+    intermediateBuffer[i] = 0;
+  }
+
+  let currentX = 0,
+    currentY = 0;
+
+  const pixelInfoToPost = [];
+
+  function processNextPixel() {
+    // Because we are using the Alpha pixel value to tell the UI thread
+    // which of the multiple data buffers to use, we can only support
+    // 254 of them (the number 0 means don't fast fill)
+    if (pixelInfoToPost.length < 254) {
+      let initX = currentX;
+
+      for (let y = currentY; y < height; y += 20) {
+        for (let x = initX; x < width; x += 20) {
+          // Reset the initial X position so that we don't skip
+          // most of the image when the next Y loop starts
+          initX = 0;
+
+          if (activeOpaqueToken !== token) {
+            // Cancel the current queue of fill actions as a new command has
+            // been sent that supercedes it.
+            return;
+          }
+
+          const firstIdx = getColorIndexForCoord(x, y, width);
+          const alphaValue = intermediateBuffer[firstIdx + 3];
+          const sourceAlphaValue = bufferArray[firstIdx + 3];
+
+          // If the pixel is still transparent, we have found a pixel that could be
+          // filled by the user, but which has not yet been processed by this function
+          if (alphaValue === 0 && sourceAlphaValue === 0) {
+            currentX = x;
+            currentY = y;
+
+            const alphaValueToSet = pixelInfoToPost.length + 1;
+
+            fillImage(
+              dimensions,
+              `rgba(0,0,0,${alphaValueToSet})`,
+              x,
+              y,
+              buffer,
+              false,
+              null,
+              (fillBuffer, _processedPointsCount, fillDimensions) => {
+                const { minX, maxX, maxY, minY } = fillDimensions;
+                const fillWidth = maxX - minX + 1;
+                const fillHeight = maxY - minY + 1;
+                const fillBufferArray = new Uint8ClampedArray(fillBuffer);
+
+                // if (fillHeight > 50 && fillWidth > 50) {
+                // Only bother to cache the pixels if it is a reasonably large
+                // area. Otherwise it'll fill up faster than the user can see anyway
+                // }
+
+                const partialBuffer = [];
+
+                // Copy over the RGBA values to the intermediateBuffer
+                for (let fillY = minY; fillY <= maxY; fillY++) {
+                  // It's necessary to process the pixels in this order,
+                  // row by row rather than column by column, as that is how
+                  // the ImageData array is interpreted
+                  for (let fillX = minX; fillX <= maxX; fillX++) {
+                    const fillFirstIndex = getColorIndexForCoord(
+                      fillX,
+                      fillY,
+                      dimensions.width
+                    );
+                    const fillA = fillBufferArray[fillFirstIndex + 3];
+
+                    const red = fillBufferArray[fillFirstIndex];
+                    const green = fillBufferArray[fillFirstIndex + 1];
+                    const blue = fillBufferArray[fillFirstIndex + 2];
+
+                    partialBuffer.push(0);
+                    partialBuffer.push(0);
+                    partialBuffer.push(0);
+
+                    if (alphaValueToSet === fillA) {
+                      intermediateBuffer[fillFirstIndex] = red;
+                      intermediateBuffer[fillFirstIndex + 1] = green;
+                      intermediateBuffer[fillFirstIndex + 2] = blue;
+                      intermediateBuffer[fillFirstIndex + 3] = fillA;
+
+                      // Store the non-transparent pixel in the subset of the canvas
+                      // so that, when a fill action is triggered, this pixel will
+                      // be coloured in
+                      partialBuffer.push(255);
+                    } else {
+                      // Store a transparent pixel, so when a fill action is taken, this
+                      // pixel will not be coloured in
+                      partialBuffer.push(0);
+                    }
+                  }
+                }
+
+                pixelInfoToPost.push({
+                  pixels: partialBuffer,
+                  x: minX,
+                  y: minY,
+                  height: fillHeight,
+                  width: fillWidth,
+                });
+
+                setTimeout(processNextPixel, 0);
+              },
+              alphaValueToSet
+            );
+            return;
+          }
+        }
+      }
+    }
+
+    // Here we've made it through the entire canvas, so send all the pixel information back to the
+    // UI thread.
+    self.postMessage(
+      {
+        response: "make_opaque",
+        height,
+        token,
+        width,
+        allPixels: intermediateBuffer,
+        pixelMaskInfo: pixelInfoToPost,
+      },
+      [buffer]
+    );
+    return;
+  }
+
+  processNextPixel();
+}
+
 function fillAction(workerData, self) {
-  const { colour, dimensions, foreground, token, x, y } = workerData;
+  const { colour, dimensions, imageData, x, y } = workerData;
   const { height, width } = dimensions;
 
   fillImage(
@@ -20,7 +179,7 @@ function fillAction(workerData, self) {
     colour,
     x,
     y,
-    foreground,
+    imageData,
     (buffer) => {
       console.log("fill progressing");
       // progress
@@ -46,7 +205,6 @@ function fillAction(workerData, self) {
           colour,
           isFinal: true,
           height,
-          token,
           width,
           pixels: processedPointsCount > 0 ? buffer : null,
         },
@@ -70,7 +228,7 @@ function fillImage(
   let destImageData = new ImageData(dimensions.width, dimensions.height);
   let destData = destImageData.data;
 
-  const foregroundData = new Uint8ClampedArray(imageBuffer);
+  const srcImageData = new Uint8ClampedArray(imageBuffer);
 
   let point = null;
   const { width, height } = dimensions;
@@ -111,20 +269,18 @@ function fillImage(
   const whiteSum = 255 * 3;
   function isWhite(startIdx) {
     const sum =
-      foregroundData[startIdx] +
-      foregroundData[startIdx + 1] +
-      foregroundData[startIdx + 2];
+      srcImageData[startIdx] +
+      srcImageData[startIdx + 1] +
+      srcImageData[startIdx + 2];
 
     // Either it's black with full transparency (the default background)
     // or it's white drawn by the user
-    return (
-      (sum === 0 && foregroundData[startIdx + 3] === 0) || sum === whiteSum
-    );
+    return (sum === 0 && srcImageData[startIdx + 3] === 0) || sum === whiteSum;
   }
 
   // If the user is sketching, we can't depend on the fillable area
   // always having a low alpha value.  When they do a fill, it modifies
-  // foregroundData for the next fill action to be that colour. So, in this
+  // srcImageData for the next fill action to be that colour. So, in this
   // case we only fill where we have a matching colour to wherever they clicked.
   let selectedColourToMatch = null;
   let selectedColourIsWhite = false;
@@ -147,19 +303,19 @@ function fillImage(
       visited[visitedKey] = true;
       delete added[visitedKey];
 
-      if (foregroundData.length < alphaIdx) {
+      if (srcImageData.length < alphaIdx) {
         continue;
       }
 
       const currentPointIsWhite = isWhite(pointIdx);
-      let canFill = foregroundData[alphaIdx] < 255 || currentPointIsWhite;
+      let canFill = srcImageData[alphaIdx] < 255 || currentPointIsWhite;
 
       // There can be semi-transparent pixels right next to fully opaque pixels.
       // Fill these in, but do not let the pixels next to them be filled, unless those
       // pixels are also touched by fully transparent pixels.
       // This fixes an issue where a seemingly opaque line lets the fill algorithm
       // to pass through it.
-      let canPropagateFromPoint = foregroundData[alphaIdx] < 100;
+      let canPropagateFromPoint = srcImageData[alphaIdx] < 100;
 
       // If the user is sketching, we use this method, as we cannot rely on the background
       // being transparent
@@ -168,25 +324,25 @@ function fillImage(
 
         canPropagateFromPoint =
           bothAreWhite ||
-          Math.abs(foregroundData[alphaIdx] - selectedColourToMatch[3]) < 100;
+          Math.abs(srcImageData[alphaIdx] - selectedColourToMatch[3]) < 100;
 
         let alphasAreEqual =
-          foregroundData[pointIdx + 3] === selectedColourToMatch[3];
+          srcImageData[pointIdx + 3] === selectedColourToMatch[3];
 
         if (
           bothAreWhite ||
           (!alphasAreEqual &&
             selectedColourToMatch[3] < 255 &&
-            foregroundData[pointIdx + 3] < 255)
+            srcImageData[pointIdx + 3] < 255)
         ) {
           alphasAreEqual = true;
         }
 
         canFill =
           bothAreWhite ||
-          (foregroundData[pointIdx] === selectedColourToMatch[0] &&
-            foregroundData[pointIdx + 1] === selectedColourToMatch[1] &&
-            foregroundData[pointIdx + 2] === selectedColourToMatch[2] &&
+          (srcImageData[pointIdx] === selectedColourToMatch[0] &&
+            srcImageData[pointIdx + 1] === selectedColourToMatch[1] &&
+            srcImageData[pointIdx + 2] === selectedColourToMatch[2] &&
             alphasAreEqual);
       }
 
