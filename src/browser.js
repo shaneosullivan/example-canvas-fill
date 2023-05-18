@@ -47,6 +47,8 @@
     worker.addEventListener("message", (evt) => {
       const { data } = evt;
 
+      console.log("Main thread got worker data", data);
+
       const { token } = data;
 
       if (token && token !== paintWorkerToken[data.response]) {
