@@ -9,9 +9,16 @@
 
     // Load the image into the canvas
     const img = new Image();
+    let initialImageData = null;
 
     img.onload = () => {
       context.drawImage(img, 0, 0);
+      initialImageData = context.getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
     };
     img.src = IMAGE_PATH;
 
@@ -19,24 +26,18 @@
       const { x, y } = getEventCoords(evt, canvas.getBoundingClientRect());
 
       const dimensions = { height: canvas.height, width: canvas.width };
-      const imageData = context.getImageData(
-        0,
-        0,
-        dimensions.width,
-        dimensions.height
-      );
 
       console.log("x", x, "y", y);
       worker.postMessage(
         {
           action: "fill",
           dimensions,
-          imageData: imageData.data.buffer,
+          imageData: initialImageData.data.buffer,
           x,
           y,
           colour,
         },
-        [imageData.data.buffer]
+        [initialImageData.data.buffer]
       );
     });
 
@@ -76,7 +77,7 @@
     tempContext.putImageData(imageData, 0, 0);
 
     // Draw the full image
-    userContext.drawImage(tempCanvas, 0, 0);
+    context.drawImage(tempCanvas, 0, 0);
   }
 
   function makeCanvas(size) {
