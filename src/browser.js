@@ -52,7 +52,7 @@
           imageData: imageData.data.buffer,
           x,
           y,
-          selectedColour,
+          colour: selectedColour,
         },
         [imageData.data.buffer]
       );
