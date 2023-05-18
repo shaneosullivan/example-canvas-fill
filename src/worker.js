@@ -461,3 +461,8 @@ function strToNum(str) {
   }
   return strVal;
 }
+
+// https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial/Pixel_manipulation_with_canvas
+function getColorIndexForCoord(x, y, width) {
+  return y * (width * 4) + x * 4;
+}
