@@ -20,7 +20,7 @@
     });
 
     // Set up the worker
-    const workerUrl = "/worker.js";
+    const workerUrl = "./src/worker.js";
     let worker = new Worker(workerUrl);
 
     worker.addEventListener("message", (evt) => {
