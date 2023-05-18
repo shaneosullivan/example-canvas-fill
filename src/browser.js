@@ -1,6 +1,7 @@
 (function () {
   const IMAGE_PATH = "./images/airplane.png";
   let fillSpeed = "slow";
+  let selectedColour = "#FF0000";
 
   function runExample() {
     const canvas = document.getElementById("canvas");
@@ -12,8 +13,6 @@
       height: canvas.height,
       width: canvas.width,
     });
-
-    let colour = "#ff0000";
 
     // Load the image into the canvas
     const img = new Image();
@@ -53,7 +52,7 @@
           imageData: imageData.data.buffer,
           x,
           y,
-          colour,
+          selectedColour,
         },
         [imageData.data.buffer]
       );
@@ -124,6 +123,9 @@
   function addFormListener() {
     document.getElementById("speedForm").addEventListener("change", (evt) => {
       fillSpeed = evt.target.value;
+    });
+    document.getElementById("colourForm").addEventListener("change", (evt) => {
+      selectedColour = evt.target.value;
     });
   }
 
