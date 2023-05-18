@@ -52,7 +52,7 @@
 
       switch (data.response) {
         case "fill":
-          handleFillMessageFromWorker(data);
+          handleFillMessageFromWorker(data, context);
           break;
         default:
           console.error("Unknown response from worker", data);
@@ -60,7 +60,7 @@
     });
   }
 
-  function handleFillMessageFromWorker(data) {
+  function handleFillMessageFromWorker(data, context) {
     const { height, width, pixels } = data;
 
     if (!pixels) {
