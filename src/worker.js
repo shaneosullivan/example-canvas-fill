@@ -70,7 +70,6 @@ function processImageAction(workerData, self) {
               x,
               y,
               buffer,
-              false,
               null,
               (fillBuffer, _processedPointsCount, fillDimensions) => {
                 const { minX, maxX, maxY, minY } = fillDimensions;
