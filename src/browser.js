@@ -43,7 +43,7 @@
       const { x, y } = getEventCoords(evt, canvas.getBoundingClientRect());
 
       console.log("x", x, "y", y);
-      fillColour(x, y, colour, context);
+      fillColour(x, y, selectedColour, context);
     });
 
     // Set up the worker
