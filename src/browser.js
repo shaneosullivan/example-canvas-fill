@@ -5,6 +5,11 @@
     const canvas = document.getElementById("canvas");
     const context = canvas.getContext("2d");
 
+    const { context: unchangingContext } = makeCanvas({
+      height: canvas.height,
+      width: canvas.width,
+    });
+
     let colour = "#ff0000";
 
     // Load the image into the canvas
@@ -13,12 +18,7 @@
 
     img.onload = () => {
       context.drawImage(img, 0, 0);
-      initialImageData = context.getImageData(
-        0,
-        0,
-        canvas.width,
-        canvas.height
-      );
+      unchangingContext.drawImage(img, 0, 0);
     };
     img.src = IMAGE_PATH;
 
@@ -26,13 +26,19 @@
       const { x, y } = getEventCoords(evt, canvas.getBoundingClientRect());
 
       const dimensions = { height: canvas.height, width: canvas.width };
+      const imageData = unchangingContext.getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
 
       console.log("x", x, "y", y);
       worker.postMessage(
         {
           action: "fill",
           dimensions,
-          imageData: initialImageData.data.buffer,
+          imageData: imageData.data.buffer,
           x,
           y,
           colour,
