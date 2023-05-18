@@ -1,9 +1,12 @@
 (function () {
   const IMAGE_PATH = "./images/airplane.png";
+  let fillSpeed = "slow";
 
   function runExample() {
     const canvas = document.getElementById("canvas");
     const context = canvas.getContext("2d");
+
+    addFormListener();
 
     const { context: unchangingContext } = makeCanvas({
       height: canvas.height,
@@ -14,24 +17,33 @@
 
     // Load the image into the canvas
     const img = new Image();
-    let initialImageData = null;
 
     img.onload = () => {
       context.drawImage(img, 0, 0);
       unchangingContext.drawImage(img, 0, 0);
+
+      const dimensions = { height: canvas.height, width: canvas.width };
+      const imageData = getSrcImageData();
+      worker.postMessage(
+        {
+          action: "process",
+          dimensions,
+          buffer: imageData.data.buffer,
+        },
+        [imageData.data.buffer]
+      );
     };
     img.src = IMAGE_PATH;
+
+    function getSrcImageData() {
+      return unchangingContext.getImageData(0, 0, canvas.width, canvas.height);
+    }
 
     canvas.addEventListener("click", (evt) => {
       const { x, y } = getEventCoords(evt, canvas.getBoundingClientRect());
 
       const dimensions = { height: canvas.height, width: canvas.width };
-      const imageData = unchangingContext.getImageData(
-        0,
-        0,
-        canvas.width,
-        canvas.height
-      );
+      const imageData = getSrcImageData();
 
       console.log("x", x, "y", y);
       worker.postMessage(
@@ -43,7 +55,7 @@
           y,
           colour,
         },
-        [initialImageData.data.buffer]
+        [imageData.data.buffer]
       );
     });
 
@@ -107,6 +119,12 @@
       y = evt.clientY;
     }
     return { x: Math.round(x - nodeRect.x), y: Math.round(y - nodeRect.y) };
+  }
+
+  function addFormListener() {
+    document.getElementById("speedForm").addEventListener("change", (evt) => {
+      fillSpeed = evt.target.value;
+    });
   }
 
   window.addEventListener("load", runExample);

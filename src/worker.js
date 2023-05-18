@@ -22,12 +22,9 @@ onmessage = function (evt) {
 function processImageAction(workerData, self) {
   const dimensions = workerData.dimensions;
   const buffer = workerData.buffer;
-  const { token } = workerData;
   const { height, width } = dimensions;
 
   const bufferArray = new Uint8ClampedArray(buffer);
-
-  activeOpaqueToken = token;
 
   // This array contains the pixels for the full image.
   // We use this to keep track of which pixels we have already filled in and which we have
@@ -54,12 +51,6 @@ function processImageAction(workerData, self) {
           // Reset the initial X position so that we don't skip
           // most of the image when the next Y loop starts
           initX = 0;
-
-          if (activeOpaqueToken !== token) {
-            // Cancel the current queue of fill actions as a new command has
-            // been sent that supercedes it.
-            return;
-          }
 
           const firstIdx = getColorIndexForCoord(x, y, width);
           const alphaValue = intermediateBuffer[firstIdx + 3];
@@ -155,9 +146,8 @@ function processImageAction(workerData, self) {
     // UI thread.
     self.postMessage(
       {
-        response: "make_opaque",
+        response: "process",
         height,
-        token,
         width,
         allPixels: intermediateBuffer,
         pixelMaskInfo: pixelInfoToPost,
