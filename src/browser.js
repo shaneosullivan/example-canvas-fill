@@ -23,14 +23,14 @@
       unchangingContext.drawImage(img, 0, 0);
 
       const dimensions = { height: canvas.height, width: canvas.width };
-      const imageData = getSrcImageData();
+      const sourceImageData = getSrcImageData();
       worker.postMessage(
         {
           action: "process",
           dimensions,
-          buffer: imageData.data.buffer,
+          buffer: sourceImageData.data.buffer,
         },
-        [imageData.data.buffer]
+        [sourceImageData.data.buffer]
       );
     };
     img.src = IMAGE_PATH;
@@ -39,17 +39,22 @@
       return unchangingContext.getImageData(0, 0, canvas.width, canvas.height);
     }
 
+    // Listen to a click on the canvas, and try to fill in the selected
+    // colour based on the x,y coordinates chosen.
     canvas.addEventListener("click", (evt) => {
       const { x, y } = getEventCoords(evt, canvas.getBoundingClientRect());
 
-      console.log("x", x, "y", y);
-      fillColour(x, y, selectedColour, context);
+      console.log("User clicked the point x", x, "y", y);
+      fillColour(x, y, selectedColour, context, unchangingContext, worker);
     });
 
     // Set up the worker
     const workerUrl = "./src/worker.js";
     let worker = new Worker(workerUrl);
 
+    // The worker script communicates with this main thread script by passing
+    // "message" events to the Worker object.  We can listen to those messages
+    // like this.
     worker.addEventListener("message", (evt) => {
       const { data } = evt;
 
@@ -57,9 +62,20 @@
 
       switch (data.response) {
         case "fill":
+          // The worker has filled in some pixels, either all the
+          // possible pixels, or a partial set of pixels as it works
+          // its way through the search/fill algorithm.
           handleFillMessageFromWorker(data, context);
           break;
         case "process":
+          // The worker has finished pre-processing the image, and
+          // sent back a version of the image where each pixel is
+          // assigned an alpha value from 1 to 255. These alpha values
+          // are used to determine what discrete fillable area any given
+          // pixel is in. This means that this algorithm can support up to
+          // 255 individual discrete fillable spaces.  If a space is not
+          // included in these, and therefore has an alpha of 0, we
+          // fall back to using the slow method of filling.
           handleProcessMessageFromWorker(data);
           break;
         default:
@@ -142,7 +158,7 @@
     tempContext.globalCompositeOperation = "source-in";
   }
 
-  function fillColour(x, y, colour, context) {
+  function fillColour(x, y, colour, context, sourceContext, worker) {
     // Fill all the transparent pixels in the source image that is being
     // coloured in
 
@@ -199,25 +215,29 @@
           pixelMaskInfo.height
         );
 
-        userContext.drawImage(
+        context.drawImage(
           pixelMaskCanvasNode,
           pixelMaskInfo.x,
           pixelMaskInfo.y
         );
-
-        storeUndoPoint();
-        callOnChange();
 
         return;
       }
     }
 
     const dimensions = {
-      height: imgCanvasNode.height,
-      width: imgCanvasNode.width,
+      height: canvas.height,
+      width: canvas.width,
     };
 
-    const imageData = contextForData.getImageData(
+    const currentImageData = contextForData.getImageData(
+      0,
+      0,
+      dimensions.width,
+      dimensions.height
+    );
+
+    const sourceImageData = sourceContext.getImageData(
       0,
       0,
       dimensions.width,
@@ -226,17 +246,17 @@
 
     // Delegate the work of filling the image to the web worker.
     // This puts it on another thread so large fills don't block the UI thread.
-    paintWorker.postMessage(
+    worker.postMessage(
       {
-        action: WorkerAction.FILL,
+        action: "fill",
         dimensions,
-        foreground: imageData.data.buffer,
-        isSketchFill: contextForData === userContext,
+        sourceImageData: sourceImageData.data.buffer,
+        currentImageData: currentImageData.data.buffer,
         x,
         y,
         colour,
       },
-      [imageData.data.buffer]
+      [currentImageData.data.buffer]
     );
   }
 
@@ -261,6 +281,11 @@
       y = evt.clientY;
     }
     return { x: Math.round(x - nodeRect.x), y: Math.round(y - nodeRect.y) };
+  }
+
+  // https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial/Pixel_manipulation_with_canvas
+  function getColorIndexForCoord(x, y, width) {
+    return y * (width * 4) + x * 4;
   }
 
   function addFormListener() {

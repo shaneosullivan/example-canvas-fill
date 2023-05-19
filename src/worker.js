@@ -71,6 +71,7 @@ function processImageAction(workerData, self) {
               y,
               buffer,
               null,
+              null,
               (fillBuffer, _processedPointsCount, fillDimensions) => {
                 const { minX, maxX, maxY, minY } = fillDimensions;
                 const fillWidth = maxX - minX + 1;
@@ -160,7 +161,8 @@ function processImageAction(workerData, self) {
 }
 
 function fillAction(workerData, self) {
-  const { colour, dimensions, imageData, x, y } = workerData;
+  const { colour, dimensions, sourceImageData, currentImageData, x, y } =
+    workerData;
   const { height, width } = dimensions;
 
   fillImage(
@@ -168,9 +170,12 @@ function fillAction(workerData, self) {
     colour,
     x,
     y,
-    imageData,
+    currentImageData,
+    sourceImageData,
+    // Callback for partial fill progress. This is used to show
+    // gradual fills to the user in the main thread
     (buffer) => {
-      console.log("fill progressing");
+      console.log("fill progressing ...");
       // progress
       self.postMessage(
         {
@@ -185,9 +190,10 @@ function fillAction(workerData, self) {
       );
       return true;
     },
+    // Callback for the fill being complete
     (buffer, processedPointsCount) => {
-      console.log("fill is complete");
       // complete
+      console.log("fill is complete");
       self.postMessage(
         {
           response: "fill",
@@ -208,7 +214,8 @@ function fillImage(
   colour,
   x,
   y,
-  imageBuffer,
+  currentImageBuffer,
+  sourceImageBuffer,
   onProgress,
   onComplete,
   forceSetAlphaValue
@@ -217,7 +224,10 @@ function fillImage(
   let destImageData = new ImageData(dimensions.width, dimensions.height);
   let destData = destImageData.data;
 
-  const srcImageData = new Uint8ClampedArray(imageBuffer);
+  const currentImageData = new Uint8ClampedArray(currentImageBuffer);
+  const sourceImageData = sourceImageBuffer
+    ? new Uint8ClampedArray(sourceImageBuffer)
+    : currentImageData;
 
   let point = null;
   const { width, height } = dimensions;
@@ -258,20 +268,21 @@ function fillImage(
   const whiteSum = 255 * 3;
   function isWhite(startIdx) {
     const sum =
-      srcImageData[startIdx] +
-      srcImageData[startIdx + 1] +
-      srcImageData[startIdx + 2];
+      sourceImageData[startIdx] +
+      sourceImageData[startIdx + 1] +
+      sourceImageData[startIdx + 2];
 
     // Either it's black with full transparency (the default background)
     // or it's white drawn by the user
-    return (sum === 0 && srcImageData[startIdx + 3] === 0) || sum === whiteSum;
+    return (
+      (sum === 0 && sourceImageData[startIdx + 3] === 0) || sum === whiteSum
+    );
   }
 
   // If the user is sketching, we can't depend on the fillable area
   // always having a low alpha value.  When they do a fill, it modifies
   // srcImageData for the next fill action to be that colour. So, in this
   // case we only fill where we have a matching colour to wherever they clicked.
-  let selectedColourToMatch = null;
   let selectedColourIsWhite = false;
 
   const selPointIdx = getPointIdx(x, y);
@@ -292,48 +303,19 @@ function fillImage(
       visited[visitedKey] = true;
       delete added[visitedKey];
 
-      if (srcImageData.length < alphaIdx) {
+      if (currentImageData.length < alphaIdx) {
         continue;
       }
 
       const currentPointIsWhite = isWhite(pointIdx);
-      let canFill = srcImageData[alphaIdx] < 255 || currentPointIsWhite;
+      let canFill = sourceImageData[alphaIdx] < 255 || currentPointIsWhite;
 
       // There can be semi-transparent pixels right next to fully opaque pixels.
       // Fill these in, but do not let the pixels next to them be filled, unless those
       // pixels are also touched by fully transparent pixels.
       // This fixes an issue where a seemingly opaque line lets the fill algorithm
       // to pass through it.
-      let canPropagateFromPoint = srcImageData[alphaIdx] < 100;
-
-      // If the user is sketching, we use this method, as we cannot rely on the background
-      // being transparent
-      if (selectedColourToMatch) {
-        const bothAreWhite = selectedColourIsWhite && currentPointIsWhite;
-
-        canPropagateFromPoint =
-          bothAreWhite ||
-          Math.abs(srcImageData[alphaIdx] - selectedColourToMatch[3]) < 100;
-
-        let alphasAreEqual =
-          srcImageData[pointIdx + 3] === selectedColourToMatch[3];
-
-        if (
-          bothAreWhite ||
-          (!alphasAreEqual &&
-            selectedColourToMatch[3] < 255 &&
-            srcImageData[pointIdx + 3] < 255)
-        ) {
-          alphasAreEqual = true;
-        }
-
-        canFill =
-          bothAreWhite ||
-          (srcImageData[pointIdx] === selectedColourToMatch[0] &&
-            srcImageData[pointIdx + 1] === selectedColourToMatch[1] &&
-            srcImageData[pointIdx + 2] === selectedColourToMatch[2] &&
-            alphasAreEqual);
-      }
+      let canPropagateFromPoint = sourceImageData[alphaIdx] < 100;
 
       if (canFill) {
         minX = Math.min(point.x, minX);
