@@ -1,12 +1,23 @@
+/*
+  This web worker is where all the filling and algorithmic stuff happens.
+*/
+
+// This onmessage function is how a web worker receives messages
+// from the main UI thread.
 onmessage = function (evt) {
   const workerData = evt.data;
 
   console.log("worker got message", workerData);
   switch (workerData.action) {
     case "fill":
+      // The user has clicked a pixel and we should start a fill
+      // from that point using their selected colour
       fillAction(workerData, this);
       break;
     case "process":
+      // When the image loads in the UI thread we pre-process it to identify
+      // up to 254 individual sections that can be filled in.
+      // This allows us to instants fill them later when the user clicks.
       processImageAction(workerData, this);
       break;
     default:
@@ -27,8 +38,8 @@ function processImageAction(workerData, self) {
   const bufferArray = new Uint8ClampedArray(buffer);
 
   // This array contains the pixels for the full image.
-  // We use this to keep track of which pixels we have already filled in and which we have
-  // not, so as to avoid extra work.
+  // We use this to keep track of which pixels we have already
+  // filled in and which we have not, so as to avoid extra work.
   let intermediateBuffer = new Array(height * width * 4);
   for (let i = 0; i < intermediateBuffer.length; i++) {
     intermediateBuffer[i] = 0;
@@ -47,11 +58,11 @@ function processImageAction(workerData, self) {
       let initX = currentX;
 
       for (let y = currentY; y < height; y += 20) {
-        for (let x = initX; x < width; x += 20) {
-          // Reset the initial X position so that we don't skip
-          // most of the image when the next Y loop starts
-          initX = 0;
+        // Reset the initial X position so that we don't skip
+        // most of the image when the next Y loop starts
+        initX = 0;
 
+        for (let x = initX; x < width; x += 20) {
           const firstIdx = getColorIndexForCoord(x, y, width);
           const alphaValue = intermediateBuffer[firstIdx + 3];
           const sourceAlphaValue = bufferArray[firstIdx + 3];
@@ -64,6 +75,13 @@ function processImageAction(workerData, self) {
 
             const alphaValueToSet = pixelInfoToPost.length + 1;
 
+            // Fill all the pixels we can from this source pixel.
+            // Set the filled colour to be black, but with the alpha
+            // value to be the next available index in the
+            // pixelInfoToPost array. This ensures that later on
+            // we can easily map from a pixel in the canvas to the
+            // correct mask to apply for an instant fill by just
+            // accessing the corresponding index in the array.
             fillImage(
               dimensions,
               `rgba(0,0,0,${alphaValueToSet})`,
@@ -71,17 +89,15 @@ function processImageAction(workerData, self) {
               y,
               buffer,
               null,
+              // We don't care about intermdiate progress, so this is null
               null,
+              // When the fill operation is completed for this part of the
+              // image
               (fillBuffer, _processedPointsCount, fillDimensions) => {
                 const { minX, maxX, maxY, minY } = fillDimensions;
                 const fillWidth = maxX - minX + 1;
                 const fillHeight = maxY - minY + 1;
                 const fillBufferArray = new Uint8ClampedArray(fillBuffer);
-
-                // if (fillHeight > 50 && fillWidth > 50) {
-                // Only bother to cache the pixels if it is a reasonably large
-                // area. Otherwise it'll fill up faster than the user can see anyway
-                // }
 
                 const partialBuffer = [];
 
@@ -124,6 +140,7 @@ function processImageAction(workerData, self) {
                   }
                 }
 
+                // Store the mask information for later sending back to the UI thread.
                 pixelInfoToPost.push({
                   pixels: partialBuffer,
                   x: minX,
@@ -132,6 +149,10 @@ function processImageAction(workerData, self) {
                   width: fillWidth,
                 });
 
+                // Use a setTimeout call before moving on to the next pixel.
+                // This frees up the thread so that if the user clicks again
+                // and another message is received, we can receive it rather
+                // than locking up this thread for potentially a few seconds
                 setTimeout(processNextPixel, 0);
               },
               alphaValueToSet
@@ -142,8 +163,8 @@ function processImageAction(workerData, self) {
       }
     }
 
-    // Here we've made it through the entire canvas, so send all the pixel information back to the
-    // UI thread.
+    // Here we've made it through the entire canvas, so send all the pixel
+    // information back to the UI thread.
     self.postMessage(
       {
         response: "process",
@@ -157,6 +178,7 @@ function processImageAction(workerData, self) {
     return;
   }
 
+  // Start off the processing.
   processNextPixel();
 }
 
@@ -176,7 +198,7 @@ function fillAction(workerData, self) {
     // gradual fills to the user in the main thread
     (buffer) => {
       console.log("fill progressing ...");
-      // progress
+      // Send the partially complete fill data back to the UI thread
       self.postMessage(
         {
           response: "fill",
@@ -194,6 +216,8 @@ function fillAction(workerData, self) {
     (buffer, processedPointsCount) => {
       // complete
       console.log("fill is complete");
+
+      // Send the completed fill data back to the UI thread
       self.postMessage(
         {
           response: "fill",
