@@ -104,10 +104,23 @@
     context.drawImage(tempCanvas, 0, 0);
   }
 
-  // We got data back from the Worker with the outside of the colouring
-  // image made opaque, but everything else made transparent.
-  // We will use this for when the user uses the 'fill' action on
-  // any pixel that is part of the background of the image
+  // We got data back from the Worker with the pixel data for the
+  // full image.  Each pixel has an alpha value of between 0 and 255.
+  // If the value is not 0, then that pixel is part of a space that
+  // can be instantly filled.
+  // The pixelMaskInfo is an array where each item looks like
+  // {
+  //   pixels: partialBuffer,
+  //   x: number,      // The leftmost pixel
+  //   y: number,      // The topmost pixel
+  //   height: number, // The height of the bounding box
+  //   width: number,  // The width of the bounding box
+  // }
+  //
+  // When the user clicks an (x,y) coordinate and is doing an
+  // instant fill, we check the alpha value of that pixel and use
+  // that integer to key into the pixelMaskInfo to select the
+  // the "pixels" to fill.
   function handleProcessMessageFromWorker(data) {
     const { height, width, allPixels: pixels } = data;
     const pixelMaskInfo = data.pixelMaskInfo;
@@ -118,30 +131,17 @@
       return;
     }
 
-    const { canvas: tempCanvas, context: tempContext } = makeCanvas(
-      {
-        height,
-        width,
-      },
-      true
-    );
-
-    // set all to transparent black
-    tempContext.clearRect(0, 0, width, height);
+    const { canvas: tempCanvas, context: tempContext } = makeCanvas({
+      height,
+      width,
+    });
 
     const imageData = new ImageData(width, height);
     imageData.data.set(new Uint8ClampedArray(pixels));
 
-    const { canvas: tempCanvas2, context: tempContext2 } = makeCanvas({
-      height,
-      width,
-    });
-    tempContext2.putImageData(imageData, 0, 0);
+    tempContext.putImageData(imageData, 0, 0);
 
-    // Now we have just the data from the worker as the only
-    // non-transparent pixels in the image
-    tempContext.drawImage(tempCanvas2, 0, 0);
-
+    // Store the mask info for use when the user clicks a pixel
     maskInfo = {
       node: tempCanvas,
       data: tempContext.getImageData(0, 0, width, height),
@@ -175,10 +175,13 @@
     y = Math.floor(y);
 
     // First check if this pixel is non-transparent in our cached
-    // image data. If so, instead of using the worker to perform
-    // an algorithmic fill, simply draw a rectangle with the right colour
+    // image data we got from the worker's pre-processing.
+    // If it has a non zero alpha value, instead of using the worker to perform
+    // a slow algorithmic fill, simply draw a rectangle filled with the right colour
     // over the entire cached image data and draw that onto the
-    // main canvasNode.
+    // main canvasNode.  This works to only draw the right pixels and not
+    // a full rectangle because we use the `globalCompositeOperation = "source-in"`
+    // on the canvas pixelMaskContext
     if (maskInfo && enableFastFill) {
       const firstIdx = getColorIndexForCoord(x, y, maskInfo.node.width);
       const alphaValue = maskInfo.data.data[firstIdx + 3];
@@ -204,6 +207,8 @@
         );
         pixelMaskContext.putImageData(pixelMaskImageData, 0, 0);
 
+        // Here's the canvas magic that makes it just draw the non
+        // transparent pixels onto our main canvas
         pixelMaskContext.globalCompositeOperation = "source-in";
 
         pixelMaskContext.fillStyle = colour;
@@ -230,6 +235,9 @@
       width: canvas.width,
     };
 
+    // You have to get these image data objects new every time, because
+    // passing through their data buffers to a Worker causes the buffers
+    // to be fully read then drained and unusable again.
     const currentImageData = contextForData.getImageData(
       0,
       0,
