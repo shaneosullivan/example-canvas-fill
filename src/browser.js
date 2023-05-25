@@ -110,7 +110,7 @@
   // can be instantly filled.
   // The pixelMaskInfo is an array where each item looks like
   // {
-  //   canvas?: OffscreenCanvas,
+  //   dataUrl?: string,
   //   pixels?: Array<number>,
   //   x: number,      // The leftmost pixel
   //   y: number,      // The topmost pixel
