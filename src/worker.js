@@ -49,6 +49,7 @@ function processImageAction(workerData, self) {
     currentY = 0;
 
   const pixelInfoToPost = [];
+  const dataUrlPromises = [];
 
   function processNextPixel() {
     // Because we are using the Alpha pixel value to tell the UI thread
@@ -140,14 +141,32 @@ function processImageAction(workerData, self) {
                   }
                 }
 
-                // Store the mask information for later sending back to the UI thread.
-                pixelInfoToPost.push({
+                const pixelInfo = {
+                  dataUrl: undefined,
                   pixels: partialBuffer,
                   x: minX,
                   y: minY,
                   height: fillHeight,
                   width: fillWidth,
-                });
+                };
+
+                // If OffscreenCanvas is supported, send back a dataUrl rather than an
+                // array of pixels.  This is much faster when the user clicks.
+                const dataUrlPromise =
+                  getDataUrlFromPixels(partialBuffer, fillWidth, fillHeight) ||
+                  undefined;
+
+                // Store the mask information for later sending back to the UI thread.
+                pixelInfoToPost.push(pixelInfo);
+
+                if (dataUrlPromise) {
+                  dataUrlPromises.push(dataUrlPromise);
+                  dataUrlPromise.then((dataUrl) => {
+                    // Replace the pixel array with the dataUrl
+                    pixelInfo.dataUrl = dataUrl;
+                    delete pixelInfo.pixels;
+                  });
+                }
 
                 // Use a setTimeout call before moving on to the next pixel.
                 // This frees up the thread so that if the user clicks again
@@ -163,23 +182,47 @@ function processImageAction(workerData, self) {
       }
     }
 
-    // Here we've made it through the entire canvas, so send all the pixel
-    // information back to the UI thread.
-    self.postMessage(
-      {
-        response: "process",
-        height,
-        width,
-        allPixels: intermediateBuffer,
-        pixelMaskInfo: pixelInfoToPost,
-      },
-      [buffer]
-    );
-    return;
+    // If we're converting all canvases to dataUrls, wait for that to complete.
+    Promise.all(dataUrlPromises).then(() => {
+      // Here we've made it through the entire canvas, so send all the pixel
+      // information back to the UI thread.
+      self.postMessage(
+        {
+          response: "process",
+          height,
+          width,
+          allPixels: intermediateBuffer,
+          pixelMaskInfo: pixelInfoToPost,
+        },
+        // Transfer the buffer
+        [buffer]
+      );
+    });
   }
 
   // Start off the processing.
   processNextPixel();
+}
+
+function getDataUrlFromPixels(pixels, width, height) {
+  if (typeof OffscreenCanvas === "undefined") {
+    return null;
+  }
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+
+  const imageData = new ImageData(width, height);
+  imageData.data.set(new Uint8ClampedArray(pixels));
+  ctx.putImageData(imageData, 0, 0);
+
+  // Some older browsers use the 'toBlob' function rather than the
+  // function in the spec 'convertToBlob', so support that
+  return canvas[canvas.convertToBlob ? "convertToBlob" : "toBlob"]().then(
+    (blob) => {
+      const dataURL = new FileReaderSync().readAsDataURL(blob);
+      return dataURL;
+    }
+  );
 }
 
 function fillAction(workerData, self) {

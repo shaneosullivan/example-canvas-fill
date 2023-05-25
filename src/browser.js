@@ -110,7 +110,8 @@
   // can be instantly filled.
   // The pixelMaskInfo is an array where each item looks like
   // {
-  //   pixels: partialBuffer,
+  //   canvas?: OffscreenCanvas,
+  //   pixels?: Array<number>,
   //   x: number,      // The leftmost pixel
   //   y: number,      // The topmost pixel
   //   height: number, // The height of the bounding box
@@ -192,39 +193,66 @@
         // The alpha value in the maskInfo is an index into the pixelMaskInfo array.
         // We subtract 1 from it as the number 0 tells us to NOT fill the pixel
         const pixelMaskInfo = maskInfo.pixelMaskInfo[alphaValue - 1];
+
+        let maskDataUrl = pixelMaskInfo.dataUrl;
+
         const { canvas: pixelMaskCanvasNode, context: pixelMaskContext } =
           makeCanvas({
             height: pixelMaskInfo.height,
             width: pixelMaskInfo.width,
           });
 
-        const pixelMaskImageData = new ImageData(
-          pixelMaskInfo.width,
-          pixelMaskInfo.height
-        );
-        pixelMaskImageData.data.set(
-          new Uint8ClampedArray(pixelMaskInfo.pixels)
-        );
-        pixelMaskContext.putImageData(pixelMaskImageData, 0, 0);
+        function performDraw() {
+          // Here's the canvas magic that makes it just draw the non
+          // transparent pixels onto our main canvas
+          pixelMaskContext.globalCompositeOperation = "source-in";
 
-        // Here's the canvas magic that makes it just draw the non
-        // transparent pixels onto our main canvas
-        pixelMaskContext.globalCompositeOperation = "source-in";
+          pixelMaskContext.fillStyle = colour;
 
-        pixelMaskContext.fillStyle = colour;
+          pixelMaskContext.fillRect(
+            0,
+            0,
+            pixelMaskInfo.width,
+            pixelMaskInfo.height
+          );
 
-        pixelMaskContext.fillRect(
-          0,
-          0,
-          pixelMaskInfo.width,
-          pixelMaskInfo.height
-        );
+          context.drawImage(
+            pixelMaskCanvasNode,
+            pixelMaskInfo.x,
+            pixelMaskInfo.y
+          );
+        }
 
-        context.drawImage(
-          pixelMaskCanvasNode,
-          pixelMaskInfo.x,
-          pixelMaskInfo.y
-        );
+        if (!maskDataUrl) {
+          // Offscreen canvas is not available, so use the array of pixels
+          // to call putImageData on the canvas.  This is a slower operation,
+          // which is why when OffscreenCanvas is supported by the browser
+          // we want to use that instead. It turns out that setting a data URI
+          // source on an Image is about 10x faster than calling
+          // putImageData on a Canvas.
+
+          const pixelMaskImageData = new ImageData(
+            pixelMaskInfo.width,
+            pixelMaskInfo.height
+          );
+
+          pixelMaskImageData.data.set(
+            new Uint8ClampedArray(pixelMaskInfo.pixels)
+          );
+          pixelMaskContext.putImageData(pixelMaskImageData, 0, 0);
+
+          performDraw();
+        } else {
+          // OffscreenCanvas is available, so we have a dataUri to set as the
+          // src of a simple Image.  This is 10x faster than calling
+          // putImageData on the Canvas context.
+          const img = new Image();
+          img.onload = () => {
+            pixelMaskContext.drawImage(img, 0, 0);
+            performDraw();
+          };
+          img.src = maskDataUrl;
+        }
 
         return;
       }
